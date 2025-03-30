@@ -38,8 +38,8 @@ def rolling_hash(prev_hash, prev_char, next_char, length, base_num=101, mod=10**
     # 移除最高位的贡献并添加新字符的贡献
     return ((prev_hash - highest_digit_val + mod) * base_num + next_val) % mod
 
-def find_repeats_hash_dp(reference, query, min_length=3, max_length=None, use_parallel=True):
-    """使用哈希和动态规划方法查找重复序列及其位置
+def find_repeats_hash_dp(reference, query, min_length=1, max_length=None, use_parallel=True):
+    """使用哈希和动态规划方法查找重复序列及其位置，忽略单个碱基的重复
     优化版本：添加提前终止条件和并行处理支持
     
     支持两种重复变异模式：
@@ -114,6 +114,7 @@ def find_repeats_hash_dp(reference, query, min_length=3, max_length=None, use_pa
     results.sort(key=lambda x: len(x['sequence']), reverse=True)
     
     end_time = time.time()
+    # 这里不使用print_and_write，因为这个函数在main函数外被调用，没有output_file参数
     print(f"查找重复序列耗时: {end_time - start_time:.2f} 秒")
     
     return results
@@ -161,6 +162,10 @@ def process_sequence(reference, query, is_reversed, results, min_length, max_len
     
     # 对于每个可能的子序列长度
     for length in range(min_length, max_length + 1):
+        # 忽略单个碱基的重复序列
+        if length == 1:
+            continue
+            
         # 提前终止条件：如果已经找到足够多的长序列，可以跳过短序列
         if len(local_results) > 100 and length < min_length + 5:
             break
@@ -227,8 +232,18 @@ def process_sequence(reference, query, is_reversed, results, min_length, max_len
                             if ref_subseq == query_subseq:
                                 query_positions.append(query_pos)
                         
-                        # 如果找到重复（额外出现的次数大于0）
-                        if len(query_positions) > 1:
+                        # 检查序列在reference中的出现次数
+                        ref_all_positions = []
+                        ref_check_pos = 0
+                        while True:
+                            ref_check_pos = reference.find(ref_subseq, ref_check_pos)
+                            if ref_check_pos == -1:
+                                break
+                            ref_all_positions.append(ref_check_pos)
+                            ref_check_pos += 1
+                        
+                        # 只有当序列在reference中仅出现一次，但在query中出现多次时，才认为是重复序列
+                        if len(ref_all_positions) == 1 and len(query_positions) > 1:
                             # 计算额外重复次数（减去在reference中对应的一次出现）
                             repeat_count = len(query_positions) - 1
                             
@@ -464,11 +479,32 @@ def visualize_matches(reference, query, repeats, figsize=(12, 10), alpha=0.5, po
     plt.subplots_adjust(left=0.25, right=0.95, top=0.95, bottom=0.1)
     plt.show()
 
-def main():
+def print_and_write(file, *args, **kwargs):
+    """同时将内容输出到终端和文件"""
+    # 输出到终端
+    print(*args, **kwargs)
+    # 输出到文件
+    if file:
+        print(*args, **kwargs, file=file)
+
+def main(max_output=None):
     # 获取输入序列
     file_path = input("请输入DNA序列文件路径（默认为'测试.txt'）：").strip()
     if not file_path:
         file_path = "测试.txt"
+    
+    # 如果未指定max_output，询问用户
+    if max_output is None:
+        max_output_input = input("请输入要显示的重复序列数量（默认为全部显示）：").strip()
+        if max_output_input:
+            try:
+                max_output = int(max_output_input)
+            except ValueError:
+                print("输入无效，将显示所有重复序列")
+                max_output = None
+    
+    # 创建输出文件
+    output_file = open("hash_dp_results.txt", "w", encoding="utf-8")
     
     try:
         with open(file_path, 'r') as file:
@@ -479,7 +515,7 @@ def main():
             query_start = content.find("query:")
             
             if ref_start == -1 or query_start == -1:
-                print("文件格式错误，无法找到reference或query序列标记")
+                print_and_write(output_file, "文件格式错误，无法找到reference或query序列标记")
                 return
             
             # 提取reference序列
@@ -490,22 +526,26 @@ def main():
             query_content = content[query_start + 6:].strip()
             query = query_content.strip().upper()
             
-            print(f"已从文件 {file_path} 读取序列：")
-            print(f"Reference序列长度: {len(reference)}")
-            print(f"Query序列长度: {len(query)}")
+            print_and_write(output_file, f"已从文件 {file_path} 读取序列：")
+            print_and_write(output_file, f"Reference序列长度: {len(reference)}")
+            print_and_write(output_file, f"Query序列长度: {len(query)}")
     except FileNotFoundError:
-        print(f"文件 {file_path} 不存在")
+        print_and_write(output_file, f"文件 {file_path} 不存在")
+        output_file.close()
         return
     except Exception as e:
-        print(f"读取文件时出错: {e}")
+        print_and_write(output_file, f"读取文件时出错: {e}")
+        output_file.close()
         return
     
     # 使用哈希和动态规划方法查找重复序列
     repeats = find_repeats_hash_dp(reference, query)
     
     # 输出结果
-    print("\n找到的重复序列：")
-    for i, repeat in enumerate(repeats[:10]):
+    print_and_write(output_file, "\n找到的重复序列：")
+    # 根据max_output参数控制输出数量，如果为None则输出所有序列
+    output_repeats = repeats if max_output is None else repeats[:max_output]
+    for i, repeat in enumerate(output_repeats):
         sequence = repeat['sequence']
         seq_length = len(sequence)
         is_reversed = repeat['reversed']
@@ -516,26 +556,29 @@ def main():
             repeat_count = repeat['repeat_count']  # 额外重复次数
             
             # 按照PPT要求输出信息
-            print(f"重复 #{i+1}:")
-            print(f"1. 第一次额外重复在reference的位置: {ref_pos}")
-            print(f"2. 重复片段的长度: {seq_length}")
-            print(f"3. 重复数量(额外出现的次数): {repeat_count}")
-            print(f"4. 重复类型: {'反向重复' if is_reversed else '正向重复'}")
-            print(f"重复序列: {sequence}")
+            print_and_write(output_file, f"重复 #{i+1}:")
+            print_and_write(output_file, f"1. 第一次额外重复在reference的位置: {ref_pos}")
+            print_and_write(output_file, f"2. 重复片段的长度: {seq_length}")
+            print_and_write(output_file, f"3. 重复数量(额外出现的次数): {repeat_count}")
+            print_and_write(output_file, f"4. 重复类型: {'反向重复' if is_reversed else '正向重复'}")
+            print_and_write(output_file, f"重复序列: {sequence}")
         else:
             # 兼容旧格式
             positions = repeat.get('positions', [])
             count = repeat.get('count', 0) - 1  # 减去第一次出现
             
             if positions:
-                print(f"重复 #{i+1}:")
-                print(f"1. 第一次额外重复在reference的位置: {positions[0]}")
-                print(f"2. 重复片段的长度: {seq_length}")
-                print(f"3. 重复数量(额外出现的次数): {count}")
-                print(f"4. 重复类型: {'反向重复' if is_reversed else '正向重复'}")
-                print(f"重复序列: {sequence}")
+                print_and_write(output_file, f"重复 #{i+1}:")
+                print_and_write(output_file, f"1. 第一次额外重复在reference的位置: {positions[0]}")
+                print_and_write(output_file, f"2. 重复片段的长度: {seq_length}")
+                print_and_write(output_file, f"3. 重复数量(额外出现的次数): {count}")
+                print_and_write(output_file, f"4. 重复类型: {'反向重复' if is_reversed else '正向重复'}")
+                print_and_write(output_file, f"重复序列: {sequence}")
         
-        print()
+        print_and_write(output_file, "")
+    
+    # 关闭输出文件
+    output_file.close()
     
     # 可视化匹配结果
     visualize_matches(reference, query, repeats)

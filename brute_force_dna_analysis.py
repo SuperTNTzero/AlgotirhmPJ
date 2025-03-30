@@ -1,78 +1,65 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import time
 
 def reverse_complement(sequence):
     """生成DNA序列的反向互补序列"""
     complement = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
     return ''.join(complement.get(base, base) for base in reversed(sequence))
 
-def smith_waterman(reference, query, match_score=2, mismatch_penalty=-1, gap_penalty=-1):
-    """实现Smith-Waterman局部序列比对算法"""
-    m, n = len(reference), len(query)
-    # 初始化得分矩阵和回溯矩阵
-    score_matrix = [[0] * (n + 1) for _ in range(m + 1)]
-    traceback = [[None] * (n + 1) for _ in range(m + 1)]
+def find_repeats_brute_force(reference, query, min_length=1, max_length=None):
+    """使用暴力匹配方法查找重复序列及其位置
     
-    # 填充得分矩阵
-    max_score = 0
-    max_pos = (0, 0)
+    支持两种重复变异模式：
+    1. 正向重复：某个序列s在reference的某个位置仅出现一次，但在query对应位置中连续出现了多次
+    2. 反向重复：某个序列s在reference的某个位置仅出现一次，但其反向互补序列s'在query对应位置中连续出现了多次
     
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            # 计算匹配得分
-            match = score_matrix[i-1][j-1] + (match_score if reference[i-1] == query[j-1] else mismatch_penalty)
-            # 计算插入和删除得分
-            delete = score_matrix[i-1][j] + gap_penalty
-            insert = score_matrix[i][j-1] + gap_penalty
-            
-            # 选择最大得分
-            score_matrix[i][j] = max(0, match, delete, insert)
-            
-            # 更新回溯矩阵
-            if score_matrix[i][j] == 0:
-                traceback[i][j] = None
-            elif score_matrix[i][j] == match:
-                traceback[i][j] = 'match'
-            elif score_matrix[i][j] == delete:
-                traceback[i][j] = 'delete'
-            else:
-                traceback[i][j] = 'insert'
-            
-            # 更新最大得分位置
-            if score_matrix[i][j] > max_score:
-                max_score = score_matrix[i][j]
-                max_pos = (i, j)
-    
-    return max_score, max_pos, traceback
-
-def find_repeats(reference, query, min_length=1):
-    """查找重复序列及其位置，忽略单个碱基的重复"""
-    results = []
-    query_len = len(query)
-    ref_len = len(reference)
+    参数:
+        reference: 参考序列
+        query: 查询序列
+        min_length: 最小子序列长度
+        max_length: 最大子序列长度，如果为None则使用两个序列的最小长度
+    """
+    # 记录开始时间
+    start_time = time.time()
     
     # 用于跟踪已经添加的序列，避免重复输出
     unique_sequences = set()
+    results = []
+    
+    ref_len = len(reference)
+    query_len = len(query)
+    
+    # 设置最大长度限制
+    if max_length is None:
+        max_length = min(ref_len, query_len)
+    else:
+        max_length = min(max_length, ref_len, query_len)
     
     # 正向搜索
-    for i in range(query_len - min_length + 1):
-        for length in range(min_length, query_len - i + 1):
-            subseq = query[i:i+length]
+    print("开始正向搜索...")
+    for ref_start in range(ref_len - min_length + 1):
+        # 每处理1000个位置打印一次进度
+        if ref_start % 1000 == 0 and ref_start > 0:
+            print(f"正向搜索进度: {ref_start}/{ref_len - min_length + 1}")
+            
+        for length in range(min_length, min(max_length + 1, ref_len - ref_start + 1)):
+            # 从reference中提取子序列
+            ref_subseq = reference[ref_start:ref_start+length]
             
             # 忽略单个碱基的重复序列
             if length == 1:
                 continue
                 
             # 如果序列已经添加过，则跳过
-            if subseq in unique_sequences:
+            if ref_subseq in unique_sequences:
                 continue
-                
+            
+            # 在query中查找所有匹配位置
             positions = []
             pos = 0
-            
-            # 在reference中查找匹配
             while True:
-                pos = reference.find(subseq, pos)
+                pos = query.find(ref_subseq, pos)
                 if pos == -1:
                     break
                 positions.append(pos)
@@ -82,42 +69,48 @@ def find_repeats(reference, query, min_length=1):
             ref_positions = []
             ref_pos = 0
             while True:
-                ref_pos = reference.find(subseq, ref_pos)
+                ref_pos = reference.find(ref_subseq, ref_pos)
                 if ref_pos == -1:
                     break
                 ref_positions.append(ref_pos)
                 ref_pos += 1
             
-            # 只要序列在reference中出现，且长度足够，就认为是重复序列
-            if len(ref_positions) >= 1 and len(subseq) >= min_length:
+            # 只有当序列在reference中仅出现一次，但在query中出现多次时，才认为是重复序列
+            if len(ref_positions) == 1 and len(positions) > 1:
                 results.append({
-                    'sequence': subseq,
+                    'sequence': ref_subseq,
                     'positions': positions,
                     'count': len(positions),
                     'reversed': False
                 })
                 # 添加到已处理序列集合中
-                unique_sequences.add(subseq)
+                unique_sequences.add(ref_subseq)
     
     # 反向搜索
+    print("开始反向搜索...")
     query_rev = reverse_complement(query)
-    for i in range(len(query_rev) - min_length + 1):
-        for length in range(min_length, len(query_rev) - i + 1):
-            subseq = query_rev[i:i+length]
+    for ref_start in range(ref_len - min_length + 1):
+        # 每处理1000个位置打印一次进度
+        if ref_start % 1000 == 0 and ref_start > 0:
+            print(f"反向搜索进度: {ref_start}/{ref_len - min_length + 1}")
+            
+        for length in range(min_length, min(max_length + 1, ref_len - ref_start + 1)):
+            # 从reference中提取子序列
+            ref_subseq = reference[ref_start:ref_start+length]
             
             # 忽略单个碱基的重复序列
             if length == 1:
                 continue
                 
             # 如果序列已经添加过，则跳过
-            if subseq in unique_sequences:
+            if ref_subseq in unique_sequences:
                 continue
-                
+            
+            # 在反向互补的query中查找所有匹配位置
             positions = []
             pos = 0
-            
             while True:
-                pos = reference.find(subseq, pos)
+                pos = query_rev.find(ref_subseq, pos)
                 if pos == -1:
                     break
                 positions.append(pos)
@@ -127,25 +120,30 @@ def find_repeats(reference, query, min_length=1):
             ref_positions = []
             ref_pos = 0
             while True:
-                ref_pos = reference.find(subseq, ref_pos)
+                ref_pos = reference.find(ref_subseq, ref_pos)
                 if ref_pos == -1:
                     break
                 ref_positions.append(ref_pos)
                 ref_pos += 1
             
-            # 只要序列在reference中出现，且长度足够，就认为是重复序列
-            if len(ref_positions) >= 1 and len(subseq) >= min_length:
+            # 只有当序列在reference中仅出现一次，但在反向互补的query中出现多次时，才认为是重复序列
+            if len(ref_positions) == 1 and len(positions) > 1:
                 results.append({
-                    'sequence': subseq,
+                    'sequence': ref_subseq,
                     'positions': positions,
                     'count': len(positions),
                     'reversed': True
                 })
                 # 添加到已处理序列集合中
-                unique_sequences.add(subseq)
+                unique_sequences.add(ref_subseq)
     
     # 按序列长度降序排序
     results.sort(key=lambda x: len(x['sequence']), reverse=True)
+    
+    # 计算并打印运行时间
+    end_time = time.time()
+    print(f"暴力匹配查找重复序列耗时: {end_time - start_time:.2f} 秒")
+    
     return results
 
 def visualize_matches(reference, query, repeats, figsize=(12, 10), alpha=0.5, point_size=3, line_width=1.0):
@@ -164,7 +162,7 @@ def visualize_matches(reference, query, repeats, figsize=(12, 10), alpha=0.5, po
     fig, ax = plt.subplots(figsize=figsize)
     
     # 设置标题和轴标签
-    ax.set_title('DNA Sequence Repeat Variations')
+    ax.set_title('DNA Sequence Repeat Variations (Brute Force)')
     ax.set_xlabel('Reference Sequence')
     ax.set_ylabel('Query Sequence')
     
@@ -297,7 +295,7 @@ def main(max_output=None):
                 max_output = None
     
     # 创建输出文件
-    output_file = open("smith_waterman_results.txt", "w", encoding="utf-8")
+    output_file = open("brute_force_results.txt", "w", encoding="utf-8")
     
     try:
         with open(file_path, 'r') as file:
@@ -332,46 +330,9 @@ def main(max_output=None):
         output_file.close()
         return
     
-    # 使用Smith-Waterman算法进行序列比对
-    score, pos, traceback = smith_waterman(reference, query)
-    
-    # 从Smith-Waterman算法的结果中提取匹配序列
-    i, j = pos
-    aligned_ref = ""
-    aligned_query = ""
-    
-    # 回溯以获取匹配序列
-    while i > 0 and j > 0 and traceback[i][j] is not None:
-        if traceback[i][j] == 'match':
-            aligned_ref = reference[i-1] + aligned_ref
-            aligned_query = query[j-1] + aligned_query
-            i -= 1
-            j -= 1
-        elif traceback[i][j] == 'delete':
-            aligned_ref = reference[i-1] + aligned_ref
-            aligned_query = '-' + aligned_query
-            i -= 1
-        elif traceback[i][j] == 'insert':
-            aligned_ref = '-' + aligned_ref
-            aligned_query = query[j-1] + aligned_query
-            j -= 1
-        else:
-            break
-    
-    # 创建一个包含Smith-Waterman结果的重复序列列表
-    repeats = []
-    if aligned_ref and aligned_query and '-' not in aligned_ref and '-' not in aligned_query:
-        # 只有当没有插入或删除时，才添加到结果中
-        repeats.append({
-            'sequence': aligned_ref,
-            'positions': [pos[0] - len(aligned_ref)],
-            'count': 1,
-            'reversed': False
-        })
-    
-    # 查找其他重复序列
-    additional_repeats = find_repeats(reference, query, min_length=10)
-    repeats.extend(additional_repeats)
+    # 使用暴力匹配算法查找重复序列
+    print_and_write(output_file, "\n使用暴力匹配算法查找重复序列...")
+    repeats = find_repeats_brute_force(reference, query)
     
     # 输出结果
     print_and_write(output_file, "\n找到的重复序列：")
